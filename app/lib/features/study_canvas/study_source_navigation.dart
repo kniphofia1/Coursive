@@ -169,7 +169,9 @@ extension _StudySourceNavigation on StudyCanvasState {
   }
 
   Future<void> _focusCitation(StudyCitation citation) {
-    final key = '${citation.source['id']}:${citation.source['offset']}';
+    final source = citation.source;
+    final key =
+        '${source['id']}:${source['fingerprint']}:${source['offset']}:${source['end']}';
     return _sourceNavigations.putIfAbsent(
       key,
       () =>
@@ -195,15 +197,21 @@ extension _StudySourceNavigation on StudyCanvasState {
       final video = source['video_path'] != null;
       final excerpt = !video && !exactPDF;
       final identity = excerpt
-          ? 'excerpt:${source['id']}:${source['offset']}:${source['fingerprint']}'
+          ? 'excerpt:${source['id']}:${source['offset']}:${source['end']}:${source['fingerprint']}'
           : '';
+      final legacyIdentity =
+          'excerpt:${source['id']}:${source['offset']}:${source['fingerprint']}';
       var card = d.cards
           .where(
             (c) =>
                 c.originalPath == path &&
                 c.sourceLectureId == lecture &&
                 (excerpt
-                    ? c.documentId == identity
+                    ? (c.documentId == identity ||
+                          // Older cards omitted the end offset. Reuse only when
+                          // their entire excerpt still matches the resolved text.
+                          c.documentId == legacyIdentity &&
+                              c.contentText == source['text'])
                     : c.type == (video ? 'video' : 'pdfdoc')),
           )
           .firstOrNull;

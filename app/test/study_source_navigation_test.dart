@@ -91,6 +91,79 @@ class NavigationApi extends fixture.FixtureApi {
 }
 
 void main() {
+  for (final concurrent in [false, true]) {
+    testWidgets(
+      'different excerpt lengths stay distinct (concurrent: $concurrent)',
+      (t) async {
+        final api = NavigationApi();
+        final turns = api.conversations['saved']!['turns'] as List;
+        final citations = (turns.single['result'] as Map)['citations'] as List;
+        final longer = '${evidence(1)['text']} with additional context';
+        citations[1]['source'] = {
+          ...evidence(1),
+          'text': longer,
+          'end': longer.runes.length,
+        };
+        final key = await fixture.open(t, api);
+        if (!concurrent) {
+          key.currentState!.document!.cards.add(
+            StudyCard(
+              id: 'legacy-excerpt',
+              type: 'text',
+              layer: 'main',
+              rect: const Rect.fromLTWH(400, 400, 480, 360),
+              text: evidence(1)['text'] as String,
+              originalPath: evidence(1)['path'] as String,
+              sourceLectureId: evidence(1)['lecture_id'] as String,
+              documentId: 'excerpt:file-1:0:fingerprint-1',
+            ),
+          );
+        }
+        await t.tap(find.byKey(const ValueKey('study-ai-tab')));
+        await t.pumpAndSettle();
+        if (concurrent) api.gate = Completer<void>();
+        await t.tap(
+          find.widgetWithText(ActionChip, 'Lecture 1 · notes.txt · 文本摘录'),
+        );
+        if (concurrent) {
+          await t.pump();
+        } else {
+          await t.pumpAndSettle();
+          expect(
+            key.currentState!.document!.cards
+                .where((c) => c.type == 'text')
+                .single
+                .id,
+            'legacy-excerpt',
+          );
+        }
+        await t.tap(
+          find.widgetWithText(ActionChip, 'Lecture 2 · notes.txt · 文本摘录'),
+        );
+        await t.pump();
+        if (concurrent) {
+          // Different ranges must both resolve; only identical clicks coalesce.
+          final resolves = api.resolves;
+          api.gate!.complete();
+          await t.pumpAndSettle();
+          expect(resolves, 2);
+        } else {
+          await t.pumpAndSettle();
+        }
+        final cards = key.currentState!.document!.cards.where(
+          (c) => c.type == 'text',
+        );
+        expect(
+          cards.map((c) => c.text),
+          unorderedEquals([evidence(1)['text'], longer]),
+        );
+        expect(find.text('返回提问处'), findsOneWidget);
+        await t.pumpWidget(const SizedBox());
+        await t.pumpAndSettle();
+      },
+    );
+  }
+
   testWidgets(
     'source navigation waits for the imported reference to be saved',
     (t) async {
