@@ -1,0 +1,93 @@
+name: Candidate macOS
+on:
+  push:
+    branches: [ci/coursive-candidate-20261124]
+permissions:
+  contents: read
+env:
+  FLUTTER_VERSION: "3.47.7"
+jobs:
+  macos:
+    name: macOS universal
+    runs-on: macos-latest
+    env:
+      VERSION: 0.1.0-rc.20261124
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: cbcb0b931a3661b1d7c13c019140042c4e157300
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: daemon/go.mod
+          cache-dependency-path: daemon/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: agent/package-lock.json
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Build
+        run: |
+          cd daemon
+          for a in arm64 amd64; do
+            CGO_ENABLED=0 GOOS=darwin GOARCH=$a go build -trimpath -ldflags="-s -w -X github.com/walkerkiller/coursive/daemon/internal/server.Version=$VERSION" -o "bin/coursive-daemon-$a" ./cmd/coursive-daemon
+          done
+          lipo -create -output bin/coursive-daemon bin/coursive-daemon-arm64 bin/coursive-daemon-amd64
+          for a in arm64 x86_64; do
+            xcrun swiftc -O -target "$a-apple-macosx11.0" ../scripts/desktop/study-pdf.swift -o "bin/coursive-study-pdf-$a"
+          done
+          lipo -create -output bin/coursive-study-pdf bin/coursive-study-pdf-arm64 bin/coursive-study-pdf-x86_64
+          lipo bin/coursive-study-pdf -verify_arch arm64 x86_64
+          for a in arm64 x86_64; do
+            xcrun swiftc -O -target "$a-apple-macosx11.0" ../scripts/desktop/pdf-notes-render.swift -o "bin/coursive-pdf-notes-render-$a"
+          done
+          lipo -create -output bin/coursive-pdf-notes-render bin/coursive-pdf-notes-render-arm64 bin/coursive-pdf-notes-render-x86_64
+          lipo bin/coursive-pdf-notes-render -verify_arch arm64 x86_64
+          cd ../app
+          flutter pub get
+          flutter build macos --release --build-name '0.1.0' --build-number '2026112409'
+
+      # Not notarized: the app is signed ad hoc after the daemon and the agent
+      # are added, so it runs once the user allows it (see the README).
+      - name: Stage and sign
+        run: |
+          app="app/build/macos/Build/Products/Release/Coursive.app"
+          res="$app/Contents/Resources"
+          # The daemon is code and sits beside the executable; the agent is data.
+          cp daemon/bin/coursive-daemon daemon/bin/coursive-study-pdf "$app/Contents/MacOS/"
+          test -x "$app/Contents/MacOS/coursive-study-pdf"
+          mkdir -p "$res/agent"
+          cp -r agent/src agent/plugins agent/package.json agent/package-lock.json "$res/agent/"
+          (cd "$res/agent" && npm ci --omit=dev)
+          daemon/bin/coursive-daemon prune "$res/agent/node_modules"
+          mkdir -p "$res/pdf-notes"
+          python3 -m venv "$RUNNER_TEMP/pdf-notes-venv"
+          "$RUNNER_TEMP/pdf-notes-venv/bin/python" -m pip install -r scripts/desktop/pdf-notes-requirements.txt
+          "$RUNNER_TEMP/pdf-notes-venv/bin/python" scripts/desktop/build-pdf-notes.py "$res/pdf-notes/coursive-pdf-notes"
+          cp daemon/bin/coursive-pdf-notes-render "$res/pdf-notes/"
+          test -x "$res/pdf-notes/coursive-pdf-notes"
+          cp LICENSE "$res/"
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          echo "APP=$app" >> "$GITHUB_ENV"
+
+      - name: Package
+        run: |
+          name="coursive-$VERSION-macos-universal"
+          mkdir -p dist dmg
+          cp -R "$APP" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Coursive" -srcfolder dmg -fs HFS+ -format UDZO "dist/$name.dmg"
+          ditto -c -k --keepParent "$APP" "dist/$name.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coursive-macos-universal
+          path: dist/*
+          retention-days: 14
+
