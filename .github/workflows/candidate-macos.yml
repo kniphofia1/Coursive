@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 6981762795170903ca5bf4188b67c51c40e63945
+          ref: abc482da82320f866983e0d4b66863f7cb1c8ecd
       - uses: actions/setup-go@v7
         with:
           go-version-file: daemon/go.mod
