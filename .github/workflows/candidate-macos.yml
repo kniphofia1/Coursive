@@ -11,11 +11,11 @@ jobs:
     name: macOS universal
     runs-on: macos-latest
     env:
-      VERSION: 0.1.0-rc.2026112605
+      VERSION: 0.1.0-rc.2026112606
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 53eb445681b61bc65ce0ae25064b939bd1080a91
+          ref: 0bc0c959a5655c72ba15008fdd8e69848a668872
       - uses: actions/setup-go@v7
         with:
           go-version-file: daemon/go.mod
@@ -50,7 +50,7 @@ jobs:
           lipo bin/coursive-pdf-notes-render -verify_arch arm64 x86_64
           cd ../app
           flutter pub get
-          flutter build macos --release --build-name '0.1.0' --build-number '2026112605'
+          flutter build macos --release --build-name '0.1.0' --build-number '2026112606'
 
       # Not notarized: the app is signed ad hoc after the daemon and the agent
       # are added, so it runs once the user allows it (see the README).
