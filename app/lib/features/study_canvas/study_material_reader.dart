@@ -111,6 +111,7 @@ extension _StudyMaterialReader on StudyCanvasState {
         title: card.title,
         prepare: flush,
         focused: _focusedMaterial?.id == card.id,
+        onCanvas: showCanvas,
         preview:
             _focusedMaterial?.id == card.id ||
             _previewVideoId == card.id ||

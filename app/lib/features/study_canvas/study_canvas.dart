@@ -758,6 +758,15 @@ class StudyCanvasState extends State<StudyCanvas>
     }
   }
 
+  /// Open the board even when the player was reached from a document citation.
+  void showCanvas() {
+    if (_focusedMaterial == null) return;
+    _update(() {
+      _focusedMaterial = null;
+      _returnToMaterial = null;
+    });
+  }
+
   /// The system back action first returns from a followed citation.
   bool returnFromSource() {
     if (_focusedMaterial != null && !widget.fullscreen) {
@@ -3153,6 +3162,7 @@ class _LocalVideo extends StatefulWidget {
     required this.initialMs,
     required this.prepare,
     required this.focused,
+    required this.onCanvas,
     required this.api,
     required this.title,
     required this.preview,
@@ -3162,6 +3172,7 @@ class _LocalVideo extends StatefulWidget {
   final Api api;
   final int initialMs;
   final bool preview, focused;
+  final VoidCallback onCanvas;
   final Future<bool> Function() prepare;
   final ValueChanged<int> onPosition;
   @override
@@ -3260,7 +3271,8 @@ class _LocalVideoState extends State<_LocalVideo> {
                 const SingleActivator(LogicalKeyboardKey.keyF): _openFullscreen,
               },
               child: Focus(autofocus: true, child: PlayerView(
-                ctl: _session!, fullscreen: false, onBack: null, onFullscreen: _openFullscreen,
+                ctl: _session!, fullscreen: false, onBack: null,
+                onCanvas: widget.onCanvas, onFullscreen: _openFullscreen,
               )),
             )
           : MaterialDesktopVideoControlsTheme(

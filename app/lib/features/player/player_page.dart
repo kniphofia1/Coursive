@@ -389,13 +389,13 @@ class _PlayerPageState extends State<PlayerPage> {
             body: ErrorState(error: (ctl.loadError ?? ctl.mediaError)!, onRetry: ctl.load),
           );
         } else {
-          PlayerView playerView({VoidCallback? returnToCanvas}) => PlayerView(
+          PlayerView playerView({VoidCallback? closeReader}) => PlayerView(
             key: _view,
-            embedded: returnToCanvas == null && _canvasMode && !_fullscreen,
+            embedded: closeReader == null && _canvasMode && !_fullscreen,
             ctl: ctl,
             fullscreen: _fullscreen,
             onFullscreen: () => _setFullscreen(!_fullscreen),
-            onBack: returnToCanvas ?? () {
+            onBack: closeReader ?? () {
               if (!_fullscreen && (_canvas.currentState?.returnFromSource() ?? false)) return;
               unawaited(_leave());
             },
@@ -404,7 +404,7 @@ class _PlayerPageState extends State<PlayerPage> {
                 ? () => setState(() => _panel = !_panel)
                 : null,
             onCanvas: _canvasMode
-                ? null
+                ? (closeReader == null ? null : _canvas.currentState?.showCanvas)
                 : () => setState(() { _startLesson=false; _canvasMode=true; }),
           );
           final view = playerView();
@@ -429,7 +429,7 @@ class _PlayerPageState extends State<PlayerPage> {
                 ctl: ctl,
                 video: view,
                 buildLectureReader: (close) => _classicLayout(
-                  width, cs, playerView(returnToCanvas: close), panel,
+                  width, cs, playerView(closeReader: close), panel,
                 ),
                 panel: panel,
                 fullscreen: _fullscreen,
