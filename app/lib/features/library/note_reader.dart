@@ -306,18 +306,19 @@ class _NoteHeader extends StatelessWidget {
 /// What a reference points to: the moment in the recording (slide on screen
 /// and what was said), a slide, or a courseware passage.
 class SourcePane extends StatelessWidget {
-  const SourcePane({super.key, required this.ref, required this.lectureId, this.onClose});
+  const SourcePane({super.key, required this.ref, required this.lectureId, this.onClose, this.onPlay});
   final CoursiveRef ref;
 
   /// Lecture that references without one belong to.
   final String lectureId;
   final VoidCallback? onClose;
+  final void Function(String, int)? onPlay;
 
   @override
   Widget build(BuildContext context) {
     final r = ref;
     return switch (r) {
-      TimeRef() => _MomentSource(lectureId: r.lectureId.isNotEmpty ? r.lectureId : lectureId, ms: r.startMs ?? r.seconds * 1000, endMs: r.endMs, quote: r.quote, onClose: onClose),
+      TimeRef() => _MomentSource(lectureId: r.lectureId.isNotEmpty ? r.lectureId : lectureId, ms: r.startMs ?? r.seconds * 1000, endMs: r.endMs, quote: r.quote, onClose: onClose, onPlay: onPlay),
       SlideRef() => _MomentSource(lectureId: r.lectureId, slideIdx: r.idx, snapshotOnly: r.snapshotOnly, imageRevision: r.imageRevision, onClose: onClose),
       CoursewareRef() when r.page!=null && r.indexRevision!=null => _ClassroomPage(ref:r,onClose:onClose),
       CoursewareRef() => CoursewareSource(lectureId: r.lectureId, file: r.file, query: r.query, verified: r.verified, page: r.page, indexRevision:r.indexRevision, onClose: onClose),
@@ -350,12 +351,13 @@ class _PaneHeader extends StatelessWidget {
 }
 
 class _MomentSource extends StatefulWidget {
-  const _MomentSource({required this.lectureId, this.ms, this.endMs, this.slideIdx, this.quote, this.imageRevision, this.snapshotOnly = false, this.onClose});
+  const _MomentSource({required this.lectureId, this.ms, this.endMs, this.slideIdx, this.quote, this.imageRevision, this.snapshotOnly = false, this.onClose, this.onPlay});
   final String lectureId;
   final int? ms, endMs, slideIdx;
   final String? quote, imageRevision;
   final bool snapshotOnly;
   final VoidCallback? onClose;
+  final void Function(String, int)? onPlay;
   @override
   State<_MomentSource> createState() => _MomentSourceState();
 }
@@ -448,7 +450,13 @@ class _MomentSourceState extends State<_MomentSource> {
                       ),
                     ],
                     if (!widget.snapshotOnly) FilledButton.tonalIcon(
-                      onPressed: () => seekOrOpen(context, widget.lectureId, ms ~/ 1000),
+                      onPressed: () {
+                        if (widget.onPlay case final play?) {
+                          play(widget.lectureId, ms);
+                        } else {
+                          seekOrOpen(context, widget.lectureId, ms ~/ 1000);
+                        }
+                      },
                       icon: const Icon(Icons.play_arrow_rounded),
                       label: Text(l10n.notePlayFrom(fmtClock(ms))),
                     ),
@@ -721,7 +729,13 @@ class _CoursewareReaderPageState extends State<_CoursewareReaderPage> {
 /// Opens a reference where no supporting pane exists (chat, player panel):
 /// timestamps seek, slides and courseware open in a sheet, lectures in the
 /// player and library files in the viewer or the system's app.
-void openRef(BuildContext context, CoursiveRef ref, {String lectureId = '', void Function(TimeRef)? onSeek}) {
+void openRef(
+  BuildContext context,
+  CoursiveRef ref, {
+  String lectureId = '',
+  void Function(TimeRef)? onSeek,
+  void Function(String, int)? onPlay,
+}) {
   if (ref is LectureRef) {
     Navigator.of(context, rootNavigator: true).push(MaterialPageRoute(builder: (_) => PlayerPage(lectureId: ref.lectureId)));
     return;
@@ -753,7 +767,17 @@ void openRef(BuildContext context, CoursiveRef ref, {String lectureId = '', void
     showDragHandle: true,
     useSafeArea: true,
     constraints: const BoxConstraints(maxWidth: 720),
-    builder: (_) => FractionallySizedBox(heightFactor: 0.85, child: SourcePane(ref: ref, lectureId: lectureId)),
+    builder: (sheet) => FractionallySizedBox(
+      heightFactor: 0.85,
+      child: SourcePane(
+        ref: ref,
+        lectureId: lectureId,
+        onPlay: onPlay == null ? null : (id, ms) {
+          Navigator.pop(sheet);
+          onPlay(id, ms);
+        },
+      ),
+    ),
   );
 }
 

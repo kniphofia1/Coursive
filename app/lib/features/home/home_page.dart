@@ -215,7 +215,7 @@ class _HomePageState extends State<HomePage> {
                             Navigator.of(context, rootNavigator: true).push(
                               MaterialPageRoute(
                                 builder: (_) =>
-                                    PlayerPage(lectureId: _recent[i].id),
+                                    PlayerPage(lectureId: _recent[i].id, startInCanvas: true),
                               ),
                             ),
                         children: [

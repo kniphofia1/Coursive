@@ -57,7 +57,7 @@ extension _StudyMarkdownEditing on StudyCanvasState {
     final content = CoursiveMarkdown(
       body,
       lectureId: widget.standalone ? '' : widget.ctl.lectureId,
-      onRef: widget.standalone ? null : (ref) => _openMarkdownReference(ref),
+      onRef: _openMarkdownReference,
       linkDecorationStyle: TextDecorationStyle.dashed,
       baseDir: card.originalPath.isEmpty
           ? ''
@@ -115,7 +115,18 @@ extension _StudyMarkdownEditing on StudyCanvasState {
   }
 
   void _openMarkdownReference(CoursiveRef ref) {
-    final lectureId = widget.ctl.lectureId;
+    final lectureId = widget.standalone ? '' : widget.ctl.lectureId;
+    if (_focusedMaterial != null || widget.standalone) {
+      openRef(
+        context, ref, lectureId: lectureId,
+        onSeek: (time) => _playReadingReference(
+          time.lectureId.isEmpty ? lectureId : time.lectureId,
+          time.seconds * 1000,
+        ),
+        onPlay: _playReadingReference,
+      );
+      return;
+    }
     if (ref is TimeRef && ref.quote == null &&
         (ref.lectureId.isEmpty || ref.lectureId == lectureId)) {
       widget.ctl.seekTo(ref.seconds * 1000);

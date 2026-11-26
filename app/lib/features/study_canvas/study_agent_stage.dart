@@ -401,6 +401,9 @@ extension _StudyStage on StudyCanvasState {
 
   /// Selects a pinned card and carries the view to it.
   void _revealCard(StudyCard card) {
+    if (_focusedMaterial != null && _focusedMaterial?.id != card.id) {
+      _closeMaterialReader();
+    }
     final d = document!;
     if (card.passageAside && card.collapsed && d.editable(card.layer)) {
       d.checkpoint();

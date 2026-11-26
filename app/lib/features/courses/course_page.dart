@@ -91,7 +91,7 @@ class _CoursePageState extends State<CoursePage> {
   }
 
   void _open(Lecture l) => Navigator.of(context, rootNavigator: true)
-      .push(MaterialPageRoute(builder: (_) => PlayerPage(lectureId: l.id)))
+      .push(MaterialPageRoute(builder: (_) => PlayerPage(lectureId: l.id, startInCanvas: true)))
       .then((_) => _load(quiet: true));
 
   @override
