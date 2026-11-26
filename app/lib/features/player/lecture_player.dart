@@ -110,7 +110,7 @@ class LecturePlayer extends ChangeNotifier implements PlayerHandle {
         if (done) save();
       }),
     ]);
-    _saver = Timer.periodic(const Duration(seconds: 10), (_) => save());
+    if (lectureId.isNotEmpty) _saver = Timer.periodic(const Duration(seconds: 10), (_) => save());
   }
 
   final Api api;
@@ -120,7 +120,7 @@ class LecturePlayer extends ChangeNotifier implements PlayerHandle {
   final int? initialPositionMs;
   final bool opensInCanvas;
 
-  late final _watch = ActivityTracker.instance?.clock(
+  late final _watch = lectureId.isEmpty ? null : ActivityTracker.instance?.clock(
     'watch',
     lectureId: lectureId,
   );
@@ -401,6 +401,13 @@ class LecturePlayer extends ChangeNotifier implements PlayerHandle {
     }
   }
 
+  /// An imported recording has its own playhead and no lecture progress record.
+  Future<void> openMaterial(Source material, int at) async {
+    assert(lectureId.isEmpty);
+    sources = [material];
+    await _open(material, Duration(milliseconds: at), play: false);
+  }
+
   Future<void> retryPlayback() async {
     final current = source;
     if (current == null) return;
@@ -582,6 +589,7 @@ class LecturePlayer extends ChangeNotifier implements PlayerHandle {
   // ---- persistence ----
 
   Future<void> save() async {
+    if (lectureId.isEmpty) return;
     final ms = positionMs;
     if (ms <= 0 || (ms - _lastSaved).abs() < 2000) return;
     _lastSaved = ms;

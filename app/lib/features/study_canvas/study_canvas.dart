@@ -11,7 +11,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -21,7 +20,7 @@ import '../../core/api.dart';
 import '../../core/clipboard_files.dart';
 import '../../core/ink_curve.dart';
 import '../../core/format.dart';
-import '../../core/models.dart';
+import '../../core/models.dart' hide Source;
 import '../../core/plugins.dart';
 import '../../core/ui_slots.dart';
 import '../../theme/glass.dart';
@@ -32,7 +31,9 @@ import '../../widgets/reading_selection_menu.dart';
 import '../../l10n/l10n.dart';
 import '../player/lecture_player.dart';
 import '../player/player_page.dart' show PlayerPage;
-import '../library/note_reader.dart' show openRef;
+import '../player/player_view.dart';
+import '../../theme/prefs.dart';
+import '../library/note_reader.dart' show NotePage, openRef;
 import '../plugins/canvas_fallback.dart';
 import '../plugins/plugin_actions.dart' show PluginViewPatch;
 import '../plugins/plugin_contributions.dart' show PluginViewPatchScope;
@@ -102,6 +103,7 @@ class StudyCanvas extends StatefulWidget {
     required this.video,
     required this.panel,
     required this.onClassic,
+    this.buildLectureReader,
     this.pdfLibraryRoot,
     this.openCanvasPDF = DockPDF.open,
     this.readClipboardFiles = readMacClipboardFiles,
@@ -133,6 +135,7 @@ class StudyCanvas extends StatefulWidget {
        panel = const SizedBox.shrink(),
        onAsk = null,
        onClassic = null,
+       buildLectureReader = null,
        fullscreen = false,
        startLesson = false,
        initialCardId = null,
@@ -154,6 +157,7 @@ class StudyCanvas extends StatefulWidget {
   final LecturePlayer? _player;
   LecturePlayer get ctl => _player!;
   final Widget video, panel;
+  final Widget Function(VoidCallback close)? buildLectureReader;
   final VoidCallback? onClassic, onNewCanvas;
   final bool seedLessonMaterials;
   final String? pdfLibraryRoot;
@@ -172,8 +176,9 @@ class StudyCanvasState extends State<StudyCanvas>
     with WidgetsBindingObserver, TickerProviderStateMixin {
   Future<void> openLesson() => _openLesson();
   StudyCard? _focusedMaterial;
-  bool get readingDocument => _focusedMaterial?.readingSurface == true;
+  bool get readingDocument => _focusedMaterial != null && _focusedMaterial?.type != 'lecture';
   StudyCard? _returnToMaterial;
+  final _documentReaders = <String, GlobalKey>{};
   final _materialReaders = <String, GlobalKey>{};
   var _seedingMaterials = false;
   int? _initialMaterialsEdit;
@@ -809,6 +814,7 @@ class StudyCanvasState extends State<StudyCanvas>
     final k = e.logicalKey;
     final keys = HardwareKeyboard.instance;
     if (_focusedMaterial != null) {
+      if (widget.fullscreen) return false;
       if (k != LogicalKeyboardKey.escape) return false;
       _closeMaterialReader();
       return true;
@@ -2048,6 +2054,11 @@ class StudyCanvasState extends State<StudyCanvas>
       );
     final d = document;
     if (d == null) return const Center(child: CircularProgressIndicator());
+    for (final card in d.cards) {
+      if (card.passageAside && card.collapsed && card.unfoldedLayoutWidth == null) {
+        _fitFoldedAside(card);
+      }
+    }
     _enabledPlugins = _activePlugins();
     _hasCanvasTools = _canvasToolContributions(context).isNotEmpty;
     return LayoutBuilder(
@@ -2084,7 +2095,7 @@ class StudyCanvasState extends State<StudyCanvas>
             ? widget.video
             : reader != null ? _materialReader(reader) : null;
         return Stack(fit: StackFit.expand, children: [
-          ExcludeFocus(
+          TickerMode(enabled: overlay == null, child: ExcludeFocus(
             excluding: overlay != null,
             child: Offstage(
               offstage: overlay != null,
@@ -2100,11 +2111,11 @@ class StudyCanvasState extends State<StudyCanvas>
                 child: canvas,
               ),
             ),
-          ),
+          )),
           if (previousReader != null)
-            ExcludeFocus(
+            TickerMode(enabled: false, child: ExcludeFocus(
               child: Offstage(offstage: true, child: _materialReader(previousReader)),
-            ),
+            )),
           if (overlay != null) overlay,
         ]);
       },
@@ -2140,6 +2151,7 @@ class StudyCanvasState extends State<StudyCanvas>
     _cardHeaderActions.removeWhere((id, _) => !cardIds.contains(id));
     _pdfBodies.removeWhere((id, _) => !cardIds.contains(id));
     _localVideoKeys.removeWhere((id, _) => !cardIds.contains(id));
+    _documentReaders.removeWhere((id, _) => !cardIds.contains(id));
     _localVideoTimes.removeWhere((id, _) => !cardIds.contains(id));
     final stage = _visibleWorld.inflate(
       math.max(_viewport.width, _viewport.height) / d.zoom,
@@ -2551,8 +2563,36 @@ class StudyCanvasState extends State<StudyCanvas>
     );
   }
 
+  String _asideLabel(StudyCard card) {
+    final question = _threadSummary[card.id]?['first'] as String?;
+    return question == null || question.isEmpty
+        ? l10n.studyHandoutAside
+        : '${l10n.studyHandoutAside} · $question';
+  }
+
+  void _fitFoldedAside(StudyCard card) {
+    final expanded = card.unfoldedLayoutWidth ??= card.contentRect.width / card.contentScale;
+    final title = TextPainter(
+      text: TextSpan(text: _asideLabel(card), style: Theme.of(context).textTheme.labelLarge),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout(maxWidth: 288);
+    // Header padding, conversation icon, and the visible 32px actions.
+    final chrome = Space.md + 16 + Space.sm * 2 + 32 * (card.sources.isEmpty ? 2 : 3);
+    final width = math.min(expanded, title.width.ceilToDouble() + chrome + 2);
+    title.dispose();
+    if ((width * card.contentScale - card.contentRect.width).abs() > .01) {
+      card.rect = card.withLayoutWidth(width);
+    }
+  }
+
   void _setCardCollapsed(StudyCard card, bool collapsed) {
     if (card.passageAside) {
+      if (!collapsed && card.unfoldedLayoutWidth != null) {
+        card.rect = card.withLayoutWidth(card.unfoldedLayoutWidth!);
+        card.unfoldedLayoutWidth = null;
+      }
       card.rect = StudyCardTransform(card).withLayoutHeight(
         collapsed
             ? _asideCollapsedHeight
@@ -2561,6 +2601,7 @@ class StudyCanvasState extends State<StudyCanvas>
             : card.expandedH / card.contentScale,
       );
       card.collapsed = collapsed;
+      if (collapsed) _fitFoldedAside(card);
       return;
     }
     if (collapsed) card.expandedH = card.rect.height;
@@ -2767,13 +2808,7 @@ class StudyCanvasState extends State<StudyCanvas>
                           ? ValueListenableBuilder<int>(
                               valueListenable: _threadTick,
                               builder: (_, _, _) {
-                                final question =
-                                    _threadSummary[c.id]?['first'] as String?;
-                                return titleLabel(
-                                  question == null || question.isEmpty
-                                      ? l10n.studyHandoutAside
-                                      : '${l10n.studyHandoutAside} · $question',
-                                );
+                                return titleLabel(_asideLabel(c));
                               },
                             )
                           : titleLabel(
@@ -3117,12 +3152,16 @@ class _LocalVideo extends StatefulWidget {
     required this.url,
     required this.initialMs,
     required this.prepare,
+    required this.focused,
+    required this.api,
+    required this.title,
     required this.preview,
     required this.onPosition,
   });
-  final String url;
+  final String url, title;
+  final Api api;
   final int initialMs;
-  final bool preview;
+  final bool preview, focused;
   final Future<bool> Function() prepare;
   final ValueChanged<int> onPosition;
   @override
@@ -3130,14 +3169,12 @@ class _LocalVideo extends StatefulWidget {
 }
 
 class _LocalVideoState extends State<_LocalVideo> {
-  late final player = Player();
-  late final controller = VideoController(player);
-  StreamSubscription? _errors;
+  LecturePlayer? _session;
   StreamSubscription? _positions;
-  bool _failed = false;
+  bool _failed = false, _fullscreen = false;
   Future<bool>? _ready;
-  bool get isPlaying => _ready != null && player.state.playing;
-  int? get positionMs => _ready == null ? null : player.state.position.inMilliseconds;
+  bool get isPlaying => _session?.playing == true;
+  int? get positionMs => _session?.positionMs;
 
   @override
   void initState() {
@@ -3151,28 +3188,17 @@ class _LocalVideoState extends State<_LocalVideo> {
     if (widget.preview && _ready == null) _ensureOpen();
   }
 
-  Future<bool> _ensureOpen() => _ready ??= _subscribeAndOpen();
-  Future<bool> _subscribeAndOpen() {
-    _errors = player.stream.error.listen((error) {
-      if (mounted) setState(() => _failed = true);
-    });
-    _positions = player.stream.position.listen(
-      (p) => widget.onPosition(p.inMilliseconds),
-    );
-    return _open();
-  }
-
+  Future<bool> _ensureOpen() => _ready ??= _open();
   Future<bool> _open() async {
     try {
-      // The media route resolves saved canvas objects. Publishing the reference
-      // must finish before the player requests its authenticated URL.
       if (!await widget.prepare()) throw const FormatException('Save failed');
       if (!mounted) return false;
-      await controller.platform.future;
+      final prefs = context.read<UiPrefs?>() ?? await UiPrefs.load();
       if (!mounted) return false;
-      await player.open(Media(widget.url), play: false);
-      if (mounted && widget.initialMs > 0)
-        await player.seek(Duration(milliseconds: widget.initialMs));
+      final ctl = _session ??= LecturePlayer(api: widget.api, lectureId: '', prefs: prefs);
+      _positions ??= ctl.player.stream.position.listen((p) => widget.onPosition(p.inMilliseconds));
+      await ctl.openMaterial(Source(label: widget.title, uri: widget.url, local: true), widget.initialMs);
+      if (mounted) setState(() {});
       return mounted && !_failed;
     } catch (_) {
       if (mounted) setState(() => _failed = true);
@@ -3185,16 +3211,31 @@ class _LocalVideoState extends State<_LocalVideo> {
     if (mounted) setState(() {});
     if (!await pending || !mounted || _failed)
       throw FormatException(l10n.studyVideoUnavailable);
-    await player.seek(Duration(milliseconds: milliseconds));
-    await player.pause();
+    await _session!.player.seek(Duration(milliseconds: milliseconds));
+    await _session!.pause();
   }
 
   @override
   void dispose() {
-    _errors?.cancel();
     _positions?.cancel();
-    if (_ready != null) unawaited(player.dispose());
+    if (_session case final ctl?) unawaited(ctl.close());
     super.dispose();
+  }
+
+  Future<void> _openFullscreen() async {
+    if (_fullscreen || _session == null) return;
+    setState(() => _fullscreen = true);
+    try {
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (route) => Scaffold(backgroundColor: Colors.black, body: PlayerView(
+          ctl: _session!, fullscreen: true,
+          onBack: () => Navigator.pop(route), onFullscreen: () => Navigator.pop(route),
+        )),
+      ));
+    } finally {
+      if (mounted) setState(() => _fullscreen = false);
+    }
   }
 
   @override
@@ -3205,11 +3246,24 @@ class _LocalVideoState extends State<_LocalVideo> {
           onPressed: () async {
             final pending = _ensureOpen();
             setState(() {});
-            if (await pending && mounted) await player.play();
+            if (await pending && mounted) await _session!.player.play();
           },
         ))
       : !_failed
-      ? MaterialDesktopVideoControlsTheme(
+      ? _session == null || _fullscreen
+          ? const SizedBox.shrink()
+          : widget.focused
+          ? CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.keyK): () => _session!.player.playOrPause(),
+                const SingleActivator(LogicalKeyboardKey.space): () => _session!.player.playOrPause(),
+                const SingleActivator(LogicalKeyboardKey.keyF): _openFullscreen,
+              },
+              child: Focus(autofocus: true, child: PlayerView(
+                ctl: _session!, fullscreen: false, onBack: null, onFullscreen: _openFullscreen,
+              )),
+            )
+          : MaterialDesktopVideoControlsTheme(
           normal: const MaterialDesktopVideoControlsThemeData(
             modifyVolumeOnScroll: false,
             playAndPauseOnTap: false,
@@ -3243,7 +3297,7 @@ class _LocalVideoState extends State<_LocalVideo> {
             fullscreen: const MaterialVideoControlsThemeData(),
             child: VideoCardHoldRegion(
               bottomControlsHeight: 84,
-              child: Video(controller: controller),
+              child: Video(controller: _session!.video),
             ),
           ),
         )

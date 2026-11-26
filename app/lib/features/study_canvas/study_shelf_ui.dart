@@ -48,7 +48,7 @@ extension _StudyShelf on StudyCanvasState {
       _topBarsBottom + 8,
     );
     return AnimatedPositioned(
-      duration: Motion.medium2,
+      duration: Motion.durationOf(context, Motion.medium2),
       curve: Motion.emphasized,
       left: side ? (tab == null ? -360 : Space.md) : Space.sm,
       right: side ? null : Space.sm,
@@ -580,7 +580,7 @@ class _ShelfState extends State<_Shelf> {
                         child: Column(
                           children: [
                             AnimatedContainer(
-                              duration: Motion.short4,
+                              duration: Motion.durationOf(context, Motion.short4),
                               curve: Motion.emphasized,
                               width: 48,
                               height: 30,
@@ -620,7 +620,7 @@ class _ShelfState extends State<_Shelf> {
           ),
           Expanded(
             child: AnimatedSwitcher(
-              duration: Motion.short4,
+              duration: Motion.durationOf(context, Motion.short4),
               child: KeyedSubtree(
                 key: ValueKey(widget.tab),
                 child: switch (widget.tab) {

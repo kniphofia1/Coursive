@@ -23,6 +23,7 @@ import '../lib/theme/glass.dart';
 import '../lib/theme/prefs.dart';
 import '../lib/theme/theme.dart';
 import '../lib/widgets/timestamp_links.dart';
+import '../lib/widgets/md_reader.dart';
 
 class FixtureApi extends Api {
   FixtureApi(this.doc) : super('http://127.0.0.1:9', 'fixture');
@@ -298,7 +299,7 @@ void main() {
         id: 'handout', type: 'text', layer: 'main',
         rect: const Rect.fromLTWH(100, 100, 620, 520),
         title: '复习讲义.md', source: 'study-assets/fixture/source.md',
-        text: List.generate(80, (index) => '第 $index 段正文').join('\n\n'),
+        text: '# 概述\n\n${List.generate(80, (index) => '第 $index 段正文').join('\n\n')}\n\n## 练习\n问题',
       ));
 
     final key = await open(t, FixtureApi(doc.json()));
@@ -307,15 +308,18 @@ void main() {
     final scroll = find.descendant(of: reader, matching: find.byType(Scrollable)).first;
     final scrollState = t.state<ScrollableState>(scroll);
 
-    await t.tap(find.byTooltip('展开阅读或播放'));
-    await t.pumpAndSettle();
-    expect(find.widgetWithText(AppBar, '复习讲义.md'), findsOneWidget);
-    expect(t.state<ScrollableState>(scroll), same(scrollState));
     await t.drag(reader, const Offset(0, -280));
     await t.pumpAndSettle();
     final offset = scrollState.position.pixels;
     expect(offset, greaterThan(0));
-
+    await t.tap(find.byTooltip('展开阅读或播放'));
+    await t.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, '复习讲义.md'), findsOneWidget);
+    expect(find.byType(ReaderToc), findsOneWidget);
+    expect(find.byType(MarkdownReader), findsOneWidget);
+    await t.tap(find.byIcon(Icons.search_rounded));
+    await t.pumpAndSettle();
+    expect(find.byType(ReaderSearchBar), findsOneWidget);
     await t.tap(find.byType(BackButton));
     await t.pumpAndSettle();
     expect(find.byType(AppBar), findsNothing);
@@ -351,9 +355,14 @@ void main() {
     );
     await t.tap(openHandout);
     await t.pumpAndSettle();
-    final reader = find.byKey(const PageStorageKey('study-reader/handout'));
+    final reader = find.byType(MarkdownReader);
     final scroll = find.descendant(of: reader, matching: find.byType(Scrollable)).first;
     final scrollState = t.state<ScrollableState>(scroll);
+    await t.tap(find.byIcon(Icons.search_rounded));
+    await t.pumpAndSettle();
+    final search = find.descendant(of: find.byType(ReaderSearchBar), matching: find.byType(TextField));
+    await t.enterText(search, '正文');
+    await t.pumpAndSettle();
     await t.tap(find.byType(TimestampChip));
     await t.pumpAndSettle();
     expect(player.requestedPlayback, 83000);
@@ -362,6 +371,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.widgetWithText(AppBar, '讲义.md'), findsOneWidget);
     expect(t.state<ScrollableState>(scroll), same(scrollState));
+    expect(t.widget<TextField>(search).controller!.text, '正文');
     expect(player.pausedAfterCitation, isTrue);
     expect(t.takeException(), isNull);
   });

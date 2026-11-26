@@ -315,6 +315,59 @@ class _PlayerPageState extends State<PlayerPage> {
     a.send(text);
   }
 
+  Widget _classicLayout(double width, ColorScheme cs, Widget view, Widget panel) {
+    if (width >= 900) {
+      return Row(
+              children: [
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      Space.md,
+                      Space.md,
+                      _panel ? 0 : Space.md,
+                      Space.md,
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(Corners.xl),
+                      child: view,
+                    ),
+                  ),
+                ),
+                AnimatedSize(
+                  duration: Motion.durationOf(context, Motion.short4),
+                  curve: Motion.emphasized,
+                  child: SizedBox(
+                    width: _panel ? (width >= 1400 ? 440 : 380) : 0,
+                    child: _panel
+                        ? Padding(
+                            padding: const EdgeInsets.all(Space.md),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(Corners.xl),
+                              child: ColoredBox(
+                                color: cs.surfaceContainerLow,
+                                child: panel,
+                              ),
+                            ),
+                          )
+                        : null,
+                  ),
+                ),
+              ],
+            );
+    }
+    return SafeArea(
+      child: LayoutBuilder(builder: (context, size) => Column(
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: size.maxHeight * .60),
+            child: AspectRatio(aspectRatio: 16 / 9, child: view),
+          ),
+          Expanded(child: ColoredBox(color: cs.surface, child: panel)),
+        ],
+      )),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -336,13 +389,13 @@ class _PlayerPageState extends State<PlayerPage> {
             body: ErrorState(error: (ctl.loadError ?? ctl.mediaError)!, onRetry: ctl.load),
           );
         } else {
-          final view = PlayerView(
+          PlayerView playerView({VoidCallback? returnToCanvas}) => PlayerView(
             key: _view,
-            embedded: _canvasMode && !_fullscreen,
+            embedded: returnToCanvas == null && _canvasMode && !_fullscreen,
             ctl: ctl,
             fullscreen: _fullscreen,
             onFullscreen: () => _setFullscreen(!_fullscreen),
-            onBack: () {
+            onBack: returnToCanvas ?? () {
               if (!_fullscreen && (_canvas.currentState?.returnFromSource() ?? false)) return;
               unawaited(_leave());
             },
@@ -354,10 +407,11 @@ class _PlayerPageState extends State<PlayerPage> {
                 ? null
                 : () => setState(() { _startLesson=false; _canvasMode=true; }),
           );
+          final view = playerView();
           final panel = PlayerSidePanel(
             ctl: ctl,
             onAsk: _ask,
-            onStudy: () { if (_canvasMode) { _canvas.currentState?.openLesson(); } else { setState(() { _startLesson=true; _canvasMode=true; }); } },
+            onStudy: () { if (_canvasMode) { _canvas.currentState?.returnFromSource(); _canvas.currentState?.openLesson(); } else { setState(() { _startLesson=true; _canvasMode=true; }); } },
             assistant: const AssistantPanel(docked: true, embedded: true),
           );
           if (_canvasMode) {
@@ -374,6 +428,9 @@ class _PlayerPageState extends State<PlayerPage> {
                 api: ctl.api,
                 ctl: ctl,
                 video: view,
+                buildLectureReader: (close) => _classicLayout(
+                  width, cs, playerView(returnToCanvas: close), panel,
+                ),
                 panel: panel,
                 fullscreen: _fullscreen,
                 onClassic: _classic,
@@ -390,55 +447,8 @@ class _PlayerPageState extends State<PlayerPage> {
             );
           } else if (_fullscreen) {
             body = view;
-          } else if (wide) {
-            body = Row(
-              children: [
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      Space.md,
-                      Space.md,
-                      _panel ? 0 : Space.md,
-                      Space.md,
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(Corners.xl),
-                      child: view,
-                    ),
-                  ),
-                ),
-                AnimatedSize(
-                  duration: Motion.medium4,
-                  curve: Motion.emphasized,
-                  child: SizedBox(
-                    width: _panel ? (width >= 1400 ? 440 : 380) : 0,
-                    child: _panel
-                        ? Padding(
-                            padding: const EdgeInsets.all(Space.md),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(Corners.xl),
-                              child: ColoredBox(
-                                color: cs.surfaceContainerLow,
-                                child: panel,
-                              ),
-                            ),
-                          )
-                        : null,
-                  ),
-                ),
-              ],
-            );
           } else {
-            body = SafeArea(
-              child: Column(
-                children: [
-                  AspectRatio(aspectRatio: 16 / 9, child: view),
-                  Expanded(
-                    child: ColoredBox(color: cs.surface, child: panel),
-                  ),
-                ],
-              ),
-            );
+            body = _classicLayout(width, cs, view, panel);
           }
         }
         return PopScope(

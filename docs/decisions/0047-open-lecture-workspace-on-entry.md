@@ -21,7 +21,7 @@ Keep the lecture layout and the material reading position when moving between vi
 
 ## Decision Outcome
 
-The course and recent-lecture entries open the lecture canvas. The existing media and document widgets move between canvas cards and a focused view. Links explicitly requesting a playback time can use the recording player. Blank canvases use the independent notebook identity and course association.
+The course and recent-lecture entries open the lecture canvas. Opening a recording uses the classic player and its lecture panel with the same playback session. Markdown opens the library document reader with contents and search. PDF opens its page and annotation reader. The underlying canvas stays mounted so returning restores the workspace. Links explicitly requesting a playback time can use the recording player. Blank canvases use the independent notebook identity and course association.
 
 ## Pros and Cons of the Options
 

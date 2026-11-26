@@ -25,36 +25,61 @@ extension _StudyMaterialReader on StudyCanvasState {
     });
   }
 
-  Widget _materialReader(StudyCard card) => Scaffold(
-    backgroundColor: card.type == 'video' || card.type == 'lecture'
-        ? Colors.black
-        : Theme.of(context).colorScheme.surface,
-    appBar: AppBar(
-      leading: BackButton(onPressed: _closeMaterialReader),
-      title: Text(card.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-      actions: [
-        if (card.markdownReader && document!.editable(card.layer))
-          IconButton(
-            tooltip: l10n.studyEditMarkdown,
-            icon: const Icon(Icons.edit_outlined),
-            onPressed: () => _text(card),
-          ),
-      ],
-    ),
-    body: card.markdownReader
-        ? Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 920),
-              child: SizedBox.expand(child: _materialBody(card)),
-            ),
-          )
-        : _materialBody(card),
-  );
+  Widget _materialReader(StudyCard card) {
+    if (card.type == 'lecture' && widget.buildLectureReader != null) {
+      return widget.buildLectureReader!(_closeMaterialReader);
+    }
+    if (card.markdownReader) {
+      final lessonActive =
+          card.lessonNote && _lessonState['noteId'] == card.documentId;
+      final page = NotePage.canvas(
+        bookmark: lessonActive ? _lessonState['bookmark'] as Map? : null,
+        onBookmark: lessonActive
+            ? (mark) => _lessonAction('position', {'bookmark': mark})
+            : null,
+        decorateSection: (text, offset, child) => _markdownPassage(
+          card,
+          text,
+          sectionOffset: offset,
+          rendered: child,
+        ),
+        document: Note({
+          'id': card.documentId,
+          'title': card.title,
+          'body': card.text,
+          'path': card.originalPath.isEmpty ? card.source : card.originalPath,
+          'course_id': widget._player?.course?.id ?? '',
+          'lecture_id': card.sourceLectureId.isEmpty
+              ? widget._player?.lectureId ?? ''
+              : card.sourceLectureId,
+          'source': card.lessonNote || card.pinnedAnswer ? 'agent' : '',
+        }),
+        onBack: _closeMaterialReader,
+        onEdit: document!.editable(card.layer) ? () => _text(card) : null,
+        onPlay: _playReadingReference,
+      );
+      return KeyedSubtree(
+        key: _documentReaders.putIfAbsent(card.id, GlobalKey.new),
+        child: card.lessonNote ? _lessonReader(card, readingPage: page) : page,
+      );
+    }
+    return Scaffold(
+      backgroundColor: card.type == 'video' || card.type == 'lecture'
+          ? Colors.black
+          : Theme.of(context).colorScheme.surface,
+      appBar: AppBar(
+        leading: BackButton(onPressed: _closeMaterialReader),
+        title: Text(card.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      ),
+      body: _materialBody(card),
+    );
+  }
 
   // Move the live reader between the card body and the expanded view.
   Widget _cardMaterial(StudyCard card) {
-    if (_focusedMaterial?.id == card.id ||
-        _returnToMaterial?.id == card.id ||
+    if ((!card.markdownReader &&
+            (_focusedMaterial?.id == card.id ||
+                _returnToMaterial?.id == card.id)) ||
         (widget.fullscreen && card.type == 'lecture') ||
         (_inlinePDF && card.type == 'pdfdoc' && card.collapsed)) {
       return const SizedBox.shrink();
@@ -82,7 +107,10 @@ extension _StudyMaterialReader on StudyCanvasState {
         url: card.path.isEmpty
             ? widget.api.studyMediaUrl(widget.ctl.lectureId, card.id)
             : widget.api.fileUrl(card.path),
+        api: widget.api,
+        title: card.title,
         prepare: flush,
+        focused: _focusedMaterial?.id == card.id,
         preview:
             _focusedMaterial?.id == card.id ||
             _previewVideoId == card.id ||

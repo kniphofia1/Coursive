@@ -353,6 +353,8 @@ void main() {
     await t.pumpAndSettle();
     expect(aside.collapsed, isTrue);
     expect(aside.rect.height, 40);
+    expect(aside.rect.width, lessThan(expanded.width));
+    expect(aside.rect.topLeft, expanded.topLeft);
     expect(input, findsNothing);
     expect(questionTitle, findsOneWidget);
     expect(await reopened.currentState!.flush(), isTrue);

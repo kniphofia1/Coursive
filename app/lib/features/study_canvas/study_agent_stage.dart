@@ -1600,7 +1600,7 @@ class _StageViewState extends State<_StageView>
                 ),
                 const SizedBox(width: Space.xs),
                 AnimatedSwitcher(
-                  duration: Motion.short4,
+                  duration: Motion.durationOf(context, Motion.short4),
                   transitionBuilder: (c, a) => FadeTransition(
                     opacity: a,
                     child: ScaleTransition(
@@ -1758,7 +1758,7 @@ class _SourceTrayState extends State<_SourceTray> {
           ),
         ),
         AnimatedSize(
-          duration: Motion.medium2,
+          duration: Motion.durationOf(context, Motion.medium2),
           curve: Motion.emphasized,
           alignment: Alignment.topCenter,
           child: _open && _folded
@@ -1879,7 +1879,7 @@ class _TraySummary extends StatelessWidget {
                   const SizedBox(width: Space.xxs),
                   AnimatedRotation(
                     turns: open ? .5 : 0,
-                    duration: Motion.short4,
+                    duration: Motion.durationOf(context, Motion.short4),
                     curve: Motion.standard,
                     child: Icon(
                       Icons.expand_more_rounded,
@@ -2059,7 +2059,7 @@ class _SourcePill extends StatelessWidget {
       child: ReadingGlow(
         active: reading,
         child: AnimatedContainer(
-          duration: Motion.short4,
+          duration: Motion.durationOf(context, Motion.short4),
           decoration: ShapeDecoration(
             shape: const StadiumBorder(),
             color: reading
@@ -2362,7 +2362,7 @@ class _Well extends StatelessWidget {
           : BorderSide(color: outline!, width: 1.5),
     );
     return AnimatedContainer(
-      duration: Motion.short3,
+      duration: Motion.durationOf(context, Motion.short3),
       decoration: ShapeDecoration(shape: shape, color: color),
       child: Material(
         type: MaterialType.transparency,
@@ -2465,7 +2465,7 @@ class _PinButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedSwitcher(
-    duration: Motion.short4,
+    duration: Motion.durationOf(context, Motion.short4),
     switchInCurve: Motion.emphasizedDecelerate,
     switchOutCurve: Motion.emphasizedAccelerate,
     transitionBuilder: (child, a) => FadeTransition(
@@ -2626,7 +2626,7 @@ class _Shot extends StatelessWidget {
                     children: [
                       AnimatedOpacity(
                         opacity: uploading || failed ? .5 : 1,
-                        duration: Motion.short4,
+                        duration: Motion.durationOf(context, Motion.short4),
                         child: Image(
                           image: image,
                           fit: BoxFit.cover,

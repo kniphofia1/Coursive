@@ -662,7 +662,7 @@ class _CitationMarkState extends State<_CitationMark> {
         : owner._evidenceView(widget.evidence).problem;
     final active = _hover || _focus || _pinned;
     final mark = AnimatedContainer(
-      duration: Motion.short3,
+      duration: Motion.durationOf(context, Motion.short3),
       constraints: BoxConstraints(minWidth: size * 1.05),
       padding: const EdgeInsets.symmetric(horizontal: 3.5, vertical: .5),
       decoration: BoxDecoration(

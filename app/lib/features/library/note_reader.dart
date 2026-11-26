@@ -26,7 +26,17 @@ import '../../l10n/l10n.dart';
 /// column, and the sources a reference points to (recording, slide or
 /// courseware) in a supporting pane — a bottom sheet on narrow windows.
 class NotePage extends StatefulWidget {
-  const NotePage({super.key, this.noteId, this.courseId = ''});
+  const NotePage({super.key, this.noteId, this.courseId = ''})
+      : document = null, onBack = null, onEdit = null, onPlay = null, decorateSection = null, bookmark = null, onBookmark = null;
+  const NotePage.canvas({super.key, required Note this.document,
+    required VoidCallback this.onBack, this.onEdit, required this.onPlay, this.decorateSection, this.bookmark, this.onBookmark})
+      : noteId = null, courseId = '';
+  final Note? document;
+  final MarkdownSectionDecorator? decorateSection;
+  final Map? bookmark;
+  final ValueChanged<Map<String, dynamic>>? onBookmark;
+  final VoidCallback? onBack, onEdit;
+  final void Function(String, int)? onPlay;
   final String? noteId;
   final String courseId;
   @override
@@ -46,11 +56,24 @@ class _NotePageState extends State<NotePage> {
   @override
   void initState() {
     super.initState();
-    if (widget.noteId == null) {
+    if (widget.document case final note?) {
+      _note = note;
+      _doc = MdDoc(note.body);
+      _loading = false;
+    } else if (widget.noteId == null) {
       _loading = false;
       _editing = true;
     } else {
       _load();
+    }
+  }
+
+  @override
+  void didUpdateWidget(NotePage old) {
+    super.didUpdateWidget(old);
+    if (widget.document case final note?) {
+      if (note.body != _note?.body) _doc = MdDoc(note.body);
+      _note = note;
     }
   }
 
@@ -79,6 +102,11 @@ class _NotePageState extends State<NotePage> {
   String get _lectureId => _note?.lectureId ?? '';
 
   void _open(CoursiveRef ref, bool wide) {
+    final play = widget.onPlay;
+    if (play != null && ref is TimeRef && ref.quote == null) {
+      play(ref.lectureId.isEmpty ? _lectureId : ref.lectureId, ref.startMs ?? ref.seconds * 1000);
+      return;
+    }
     if (ref is LectureRef || ref is FileRef || ref is NoteRef || ref is CanvasRef) {
       openRef(context, ref);
       return;
@@ -92,7 +120,9 @@ class _NotePageState extends State<NotePage> {
       isScrollControlled: true,
       showDragHandle: true,
       useSafeArea: true,
-      builder: (_) => FractionallySizedBox(heightFactor: 0.85, child: SourcePane(ref: ref, lectureId: _lectureId)),
+      builder: (sheet) => FractionallySizedBox(heightFactor: 0.85, child: SourcePane(ref: ref, lectureId: _lectureId,
+        onPlay: play == null ? null : (id, ms) { Navigator.pop(sheet); play(id, ms); },
+      )),
     );
   }
 
@@ -125,34 +155,34 @@ class _NotePageState extends State<NotePage> {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.read<AppState>();
+    final app = context.read<AppState?>();
     final n = _note;
     final cs = Theme.of(context).colorScheme;
-    return ReportScreen(
-      value: {'screen': l10n.commonNotes, if (n != null) 'note_id': n.id, if (n != null) 'note_title': n.title, if (n != null && n.lectureId.isNotEmpty) 'lecture_id': n.lectureId},
-      child: ActivityRegion(kind: 'read', lectureId: n?.lectureId ?? '', child: LayoutBuilder(builder: (context, c) {
+    final canvas = widget.document != null;
+    final page = LayoutBuilder(builder: (context, c) {
         final tocPane = c.maxWidth >= 1040;
         final sidePane = c.maxWidth >= 1200;
         final reading = !_loading && _error == null && !_editing && n != null;
         return Scaffold(
-          backgroundColor: Colors.transparent,
+          backgroundColor: canvas ? cs.surface : Colors.transparent,
           appBar: AppBar(
             backgroundColor: Colors.transparent,
+            leading: widget.onBack == null ? null : BackButton(onPressed: widget.onBack),
             title: Text(n == null ? l10n.noteNew : n.title, maxLines: 1, overflow: TextOverflow.ellipsis),
             actions: [
               if (reading) ...[
                 IconButton(tooltip: l10n.commonFind, isSelected: _search, onPressed: () => setState(() => _search = !_search), icon: const Icon(Icons.search_rounded)),
                 if (!tocPane && _doc!.headings.isNotEmpty) IconButton(tooltip: l10n.commonContents, onPressed: _showToc, icon: const Icon(Icons.toc_rounded)),
-                IconButton(tooltip: l10n.commonEdit, onPressed: () => setState(() => _editing = true), icon: const Icon(Icons.edit_outlined)),
+                if (!canvas || widget.onEdit != null) IconButton(tooltip: l10n.commonEdit, onPressed: widget.onEdit ?? () => setState(() => _editing = true), icon: const Icon(Icons.edit_outlined)),
               ],
-              if (reading)
+              if (reading && !canvas)
                 PluginMenuButton(
                   surface: 'note.toolbar',
                   noteViews: true,
                   exportScope: 'note',
                   context_: {'note_id': n.id, if (n.lectureId.isNotEmpty) 'lecture_id': n.lectureId, if (n.courseId.isNotEmpty) 'course_id': n.courseId},
                 ),
-              if (n != null && n.lectureId.isNotEmpty)
+              if (!canvas && n != null && n.lectureId.isNotEmpty)
                 IconButton(
                   tooltip: l10n.noteOpenLecture,
                   onPressed: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute(builder: (_) => PlayerPage(lectureId: n.lectureId))),
@@ -169,7 +199,7 @@ class _NotePageState extends State<NotePage> {
                       },
                       child: Text(l10n.noteCopyMarkdown),
                     ),
-                    MenuItemButton(leadingIcon: const Icon(Icons.delete_outline_rounded), onPressed: _delete, child: Text(l10n.commonDelete)),
+                    if (!canvas) MenuItemButton(leadingIcon: const Icon(Icons.delete_outline_rounded), onPressed: _delete, child: Text(l10n.commonDelete)),
                   ],
                   builder: (context, m, _) => IconButton(tooltip: l10n.commonMore, onPressed: () => m.isOpen ? m.close() : m.open(), icon: const Icon(Icons.more_vert_rounded)),
                 ),
@@ -218,7 +248,7 @@ class _NotePageState extends State<NotePage> {
                           Expanded(
                             child: Column(children: [
                               AnimatedSize(
-                                duration: Motion.medium2,
+                                duration: Motion.durationOf(context, Motion.medium2),
                                 curve: Motion.emphasized,
                                 child: _search ? ReaderSearchBar(doc: _doc!, controller: _reader, onClose: () => setState(() => _search = false)) : const SizedBox(width: double.infinity),
                               ),
@@ -227,16 +257,19 @@ class _NotePageState extends State<NotePage> {
                                   key: ValueKey(n.updatedAt),
                                   doc: _doc!,
                                   controller: _reader,
+                                  decorateSection: widget.decorateSection,
+                                  bookmark: widget.bookmark,
+                                  onBookmark: widget.onBookmark,
                                   lectureId: n.lectureId,
                                   baseDir: p.posix.dirname(n.path),
                                   onRef: (r) => _open(r, sidePane),
-                                  header: _NoteHeader(note: n, courseTitle: app.course(n.courseId)?.title ?? ''),
+                                  header: _NoteHeader(note: n, courseTitle: app?.course(n.courseId)?.title ?? ''),
                                 ),
                               ),
                             ]),
                           ),
                           AnimatedSize(
-                            duration: Motion.medium4,
+                            duration: Motion.durationOf(context, Motion.medium4),
                             curve: Motion.emphasized,
                             alignment: Alignment.centerLeft,
                             child: sidePane && _ref != null
@@ -251,6 +284,7 @@ class _NotePageState extends State<NotePage> {
                                         child: SourcePane(
                                           key: ValueKey(_ref),
                                           ref: _ref!,
+                                          onPlay: widget.onPlay,
                                           lectureId: _lectureId,
                                           onClose: () => setState(() => _ref = null),
                                         ),
@@ -261,7 +295,11 @@ class _NotePageState extends State<NotePage> {
                           ),
                         ]),
         );
-      })),
+    });
+    if (canvas) return page;
+    return ReportScreen(
+      value: {'screen': l10n.commonNotes, if (n != null) 'note_id': n.id, if (n != null) 'note_title': n.title, if (n != null && n.lectureId.isNotEmpty) 'lecture_id': n.lectureId},
+      child: ActivityRegion(kind: 'read', lectureId: _lectureId, child: page),
     );
   }
 }

@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 
 import '../theme/tokens.dart';
 import 'coursive_markdown.dart';
@@ -22,23 +25,27 @@ class MdDoc {
     final ids = MarkdownHeadingIds();
     var buf = StringBuffer();
     var inFence = false;
+    var offset = 0, sectionStart = 0;
     for (final line in md.split('\n')) {
       if (fence.hasMatch(line)) inFence = !inFence;
       final m = inFence ? null : heading.firstMatch(line);
       if (m != null) {
-        if (buf.toString().trim().isNotEmpty || sections.isNotEmpty) sections.add(buf.toString());
+        if (buf.toString().trim().isNotEmpty || sections.isNotEmpty) { sections.add(buf.toString()); starts.add(sectionStart); }
+        sectionStart = offset;
         buf = StringBuffer();
         final title = _plain(m[2]!);
         headings.add(MdHeading(m[1]!.length, title, sections.length));
         headingSections[ids.add(title)] = sections.length;
       }
       buf.writeln(line);
+      offset += line.length + 1;
     }
-    if (buf.toString().trim().isNotEmpty) sections.add(buf.toString());
+    if (buf.toString().trim().isNotEmpty) { sections.add(buf.toString()); starts.add(sectionStart); }
     lower = [for (final s in sections) s.toLowerCase()];
   }
 
   final sections = <String>[];
+  final starts = <int>[];
   final headings = <MdHeading>[];
   final headingSections = <String, int>{};
   late final List<String> lower;
@@ -88,6 +95,8 @@ class MdReaderController extends ChangeNotifier {
   }
 }
 
+typedef MarkdownSectionDecorator = Widget Function(String text, int sourceOffset, Widget section);
+
 /// Reading surface: a centred column of Markdown sections with a header.
 class MarkdownReader extends StatefulWidget {
   const MarkdownReader({
@@ -101,6 +110,9 @@ class MarkdownReader extends StatefulWidget {
     this.maxWidth = 760,
     this.padding = const EdgeInsets.fromLTRB(Space.xl, Space.lg, Space.xl, Space.huge),
     this.initialQuery,
+    this.decorateSection,
+    this.bookmark,
+    this.onBookmark,
   });
 
   final MdDoc doc;
@@ -113,6 +125,9 @@ class MarkdownReader extends StatefulWidget {
 
   /// Jump to the first passage containing this text once laid out.
   final String? initialQuery;
+  final MarkdownSectionDecorator? decorateSection;
+  final Map? bookmark;
+  final ValueChanged<Map<String, dynamic>>? onBookmark;
 
   @override
   State<MarkdownReader> createState() => _MarkdownReaderState();
@@ -122,6 +137,60 @@ class _MarkdownReaderState extends State<MarkdownReader> {
   final _scroll = ScrollController();
   final _keys = <int, GlobalKey>{};
   int? _flash;
+  Timer? _clearFlash;
+  int _jumpRequest = 0;
+  bool _restoredBookmark = false, _restoring = false;
+
+  Iterable<RenderParagraph> _paragraphs(RenderObject root) sync* {
+    if (root is RenderParagraph) yield root;
+    final children = <RenderObject>[];
+    root.visitChildren(children.add);
+    for (final child in children) { yield* _paragraphs(child); }
+  }
+
+  Future<void> _restoreBookmark(Map mark) async {
+    if (!mounted || !_scroll.hasClients || _restoredBookmark) return;
+    _restoredBookmark = _restoring = true;
+    try {
+      final quote = mark['quote'] as String? ?? '';
+      final ratio = (mark['ratio'] as num? ?? 0).clamp(0, 1);
+      _scroll.jumpTo(_scroll.position.maxScrollExtent * ratio);
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || !_scroll.hasClients || quote.isEmpty) return;
+      final hits = doc.find(quote);
+      if (hits.length == 1 && _keys[hits.first]?.currentContext == null) {
+        await _jump(hits.first);
+      }
+      if (!mounted || !_scroll.hasClients) return;
+      final viewport = context.findRenderObject()!;
+      for (final paragraph in _paragraphs(viewport)) {
+        if (!paragraph.text.toPlainText().startsWith(quote)) continue;
+        final y = paragraph.localToGlobal(Offset.zero, ancestor: viewport).dy;
+        final target = _scroll.offset + y + paragraph.size.height * (mark['fraction'] as num? ?? 0);
+        _scroll.jumpTo(target.clamp(0.0, _scroll.position.maxScrollExtent));
+        break;
+      }
+    } finally { _restoring = false; }
+  }
+
+  bool _saveBookmark(ScrollEndNotification event) {
+    if (event.depth != 0 || _restoring || !_scroll.hasClients || widget.onBookmark == null) return false;
+    final pos = _scroll.position;
+    if (pos.maxScrollExtent <= 0) return false;
+    final viewport = context.findRenderObject()!;
+    var quote = '';
+    var fraction = 0.0;
+    for (final p in _paragraphs(viewport)) {
+      final y = p.localToGlobal(Offset.zero, ancestor: viewport).dy;
+      final text = p.text.toPlainText();
+      if (y + p.size.height <= 0 || text.trim().isEmpty) continue;
+      quote = String.fromCharCodes(text.runes.take(70));
+      fraction = (-y / p.size.height).clamp(0.0, 1.0);
+      break;
+    }
+    widget.onBookmark!({'ratio': (pos.pixels / pos.maxScrollExtent).clamp(0.0, 1.0), 'quote': quote, 'fraction': fraction});
+    return false;
+  }
 
   MdDoc get doc => widget.doc;
 
@@ -147,6 +216,7 @@ class _MarkdownReaderState extends State<MarkdownReader> {
   @override
   void dispose() {
     if (widget.controller._state == this) widget.controller._state = null;
+    _clearFlash?.cancel();
     _scroll.dispose();
     super.dispose();
   }
@@ -167,12 +237,14 @@ class _MarkdownReaderState extends State<MarkdownReader> {
   }
 
   Future<void> _jump(int i, {bool flash = false}) async {
-    if (flash) setState(() => _flash = i);
+    final request = ++_jumpRequest;
+    _clearFlash?.cancel();
+    setState(() => _flash = flash ? i : null);
     for (var attempt = 0; attempt < 4; attempt++) {
-      if (!mounted) return;
+      if (!mounted || request != _jumpRequest) return;
       final ctx = _keys[i]?.currentContext;
       if (ctx != null && ctx.mounted) {
-        await Scrollable.ensureVisible(ctx, alignment: 0.02, duration: Motion.long2, curve: Motion.emphasized);
+        await Scrollable.ensureVisible(ctx, alignment: 0.02, duration: Motion.durationOf(context, Motion.short4), curve: Motion.emphasized);
         break;
       }
       if (!_scroll.hasClients) return;
@@ -181,9 +253,8 @@ class _MarkdownReaderState extends State<MarkdownReader> {
       _scroll.jumpTo((_scroll.position.maxScrollExtent * f).clamp(0.0, _scroll.position.maxScrollExtent));
       await WidgetsBinding.instance.endOfFrame;
     }
-    if (flash) {
-      await Future.delayed(const Duration(milliseconds: 1600));
-      if (mounted && _flash == i) setState(() => _flash = null);
+    if (mounted && flash && request == _jumpRequest) {
+      _clearFlash = Timer(const Duration(milliseconds: 1600), () => setState(() => _flash = null));
     }
   }
 
@@ -199,9 +270,11 @@ class _MarkdownReaderState extends State<MarkdownReader> {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final n = doc.sections.length + (widget.header == null ? 0 : 1);
-    return SelectionArea(
-      contextMenuBuilder: readingSelectionMenu,
-      child: ListView.builder(
+    if (widget.bookmark case final Map mark when !_restoredBookmark) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _restoreBookmark(mark));
+    }
+    Widget decorate(int i, Widget child) => widget.decorateSection?.call(doc.sections[i], doc.starts[i], child) ?? child;
+    final list = ListView.builder(
         controller: _scroll,
         padding: widget.padding,
         itemCount: n,
@@ -214,28 +287,31 @@ class _MarkdownReaderState extends State<MarkdownReader> {
             child = KeyedSubtree(
               key: _keys.putIfAbsent(i, GlobalKey.new),
               child: AnimatedContainer(
-                duration: Motion.long2,
+                duration: Motion.durationOf(context, Motion.long2),
                 curve: Motion.standard,
                 padding: const EdgeInsets.symmetric(horizontal: Space.sm),
                 decoration: BoxDecoration(
                   color: _flash == i ? cs.tertiaryContainer.withValues(alpha: 0.45) : Colors.transparent,
                   borderRadius: BorderRadius.circular(Corners.md),
                 ),
-                child: CoursiveMarkdown(
+                child: decorate(i, CoursiveMarkdown(
                   doc.sections[i],
                   style: tt.bodyLarge?.copyWith(height: 1.75),
                   lectureId: widget.lectureId,
                   baseDir: widget.baseDir,
                   onRef: widget.onRef,
                   onFragment: _followFragment,
-                ),
+                )),
               ),
             );
           }
           return Center(child: ConstrainedBox(constraints: BoxConstraints(maxWidth: widget.maxWidth), child: child));
         },
-      ),
     );
+    final body = widget.onBookmark == null ? list :
+        NotificationListener<ScrollEndNotification>(onNotification: _saveBookmark, child: list);
+    return widget.decorateSection != null ? body :
+        SelectionArea(contextMenuBuilder: readingSelectionMenu, child: body);
   }
 }
 
