@@ -403,9 +403,6 @@ class _PlayerPageState extends State<PlayerPage> {
             onTogglePanel: wide && !_fullscreen
                 ? () => setState(() => _panel = !_panel)
                 : null,
-            onCanvas: _canvasMode
-                ? (closeReader == null ? null : _canvas.currentState?.showCanvas)
-                : () => setState(() { _startLesson=false; _canvasMode=true; }),
           );
           final view = playerView();
           final panel = PlayerSidePanel(

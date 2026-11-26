@@ -758,15 +758,6 @@ class StudyCanvasState extends State<StudyCanvas>
     }
   }
 
-  /// Open the board even when the player was reached from a document citation.
-  void showCanvas() {
-    if (_focusedMaterial == null) return;
-    _update(() {
-      _focusedMaterial = null;
-      _returnToMaterial = null;
-    });
-  }
-
   /// The system back action first returns from a followed citation.
   bool returnFromSource() {
     if (_focusedMaterial != null && !widget.fullscreen) {
@@ -2092,7 +2083,7 @@ class StudyCanvasState extends State<StudyCanvas>
               child: GlassBackdropScope(
                 enabled:
                     defaultTargetPlatform != TargetPlatform.android ||
-                    !_writing,
+                    (!_writing && !_pdfPinching),
                 child: _canvas(d),
               ),
             ),
@@ -2166,6 +2157,25 @@ class StudyCanvasState extends State<StudyCanvas>
       math.max(_viewport.width, _viewport.height) / d.zoom,
     );
     _stageRect = stage;
+    // Budget the temporary textures together. Very large or offscreen cards
+    // stay live, as do video and interactive conversations.
+    var remainingPixels = 6 * 1024 * 1024.0;
+    final pixelRatio = MediaQuery.devicePixelRatioOf(context);
+    Widget cardContents(StudyCard c) {
+      final child = _card(c);
+      if (defaultTargetPlatform != TargetPlatform.android ||
+          !(c.type == 'text' || c.type == 'pdf' || c.type == 'pdfdoc')) {
+        return child;
+      }
+      final size = c.contentRect.size / c.contentScale;
+      final pixels = size.width * size.height * pixelRatio * pixelRatio;
+      final capture = _pdfPinching && c.visualBounds.overlaps(view) &&
+          pixels <= remainingPixels &&
+          size.longestSide * pixelRatio <= 4096;
+      if (capture) remainingPixels -= pixels;
+      return _PinchCardPreview(active: capture, child: child);
+    }
+
     return RepaintBoundary(
       key: _inputSurface,
       child: ClipRect(
@@ -2316,7 +2326,7 @@ class StudyCanvasState extends State<StudyCanvas>
                                                     height:
                                                         c.contentRect.height /
                                                         c.contentScale,
-                                                    child: _card(c),
+                                                    child: cardContents(c),
                                                   ),
                                                 ),
                                               ),
@@ -2347,6 +2357,7 @@ class StudyCanvasState extends State<StudyCanvas>
                                                 _inlinePDF,
                                                 _dark,
                                               );
+                                              if (ink.isEmpty) return const SizedBox.shrink();
                                               final tail = preview
                                                   ? 0
                                                   : ink.length ~/ 64 * 64;
@@ -3162,7 +3173,6 @@ class _LocalVideo extends StatefulWidget {
     required this.initialMs,
     required this.prepare,
     required this.focused,
-    required this.onCanvas,
     required this.api,
     required this.title,
     required this.preview,
@@ -3172,7 +3182,6 @@ class _LocalVideo extends StatefulWidget {
   final Api api;
   final int initialMs;
   final bool preview, focused;
-  final VoidCallback onCanvas;
   final Future<bool> Function() prepare;
   final ValueChanged<int> onPosition;
   @override
@@ -3272,7 +3281,7 @@ class _LocalVideoState extends State<_LocalVideo> {
               },
               child: Focus(autofocus: true, child: PlayerView(
                 ctl: _session!, fullscreen: false, onBack: null,
-                onCanvas: widget.onCanvas, onFullscreen: _openFullscreen,
+                onFullscreen: _openFullscreen,
               )),
             )
           : MaterialDesktopVideoControlsTheme(
@@ -3325,6 +3334,40 @@ Color studyPaperTone(int color, ColorScheme cs) =>
         cs.surfaceContainerLow,
       )
     : Color(color);
+
+/// Reuse the card pixels only while two fingers move the camera. Its live
+/// widget tree stays mounted so scroll position, selection and editing survive.
+class _PinchCardPreview extends StatefulWidget {
+  const _PinchCardPreview({required this.active, required this.child});
+  final bool active;
+  final Widget child;
+
+  @override
+  State<_PinchCardPreview> createState() => _PinchCardPreviewState();
+}
+
+class _PinchCardPreviewState extends State<_PinchCardPreview> {
+  late final _controller = SnapshotController(allowSnapshotting: widget.active);
+
+  @override
+  void didUpdateWidget(_PinchCardPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _controller.allowSnapshotting = widget.active;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SnapshotWidget(
+    controller: _controller,
+    mode: SnapshotMode.permissive,
+    child: widget.child,
+  );
+}
 
 class _Paper extends CustomPainter {
   _Paper({
