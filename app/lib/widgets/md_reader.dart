@@ -308,7 +308,7 @@ class _MarkdownReaderState extends State<MarkdownReader> {
         if (!mounted || request != _jumpRequest || !_scroll.hasClients) return;
         final ctx = _keys[i]?.currentContext;
         if (ctx != null && ctx.mounted) {
-          await Scrollable.ensureVisible(ctx, alignment: 0.02,
+          await Scrollable.ensureVisible(ctx, alignment: 0,
               duration: Motion.durationOf(context, Motion.short4), curve: Motion.emphasized);
           await WidgetsBinding.instance.endOfFrame;
           if (!mounted || request != _jumpRequest || !_scroll.hasClients) return;

@@ -181,7 +181,7 @@ void main() {
     await t.pumpWidget(MaterialApp(
       home: Scaffold(body: MarkdownReader(doc: doc, controller: controller, onBookmark: saved.add)),
     ));
-    for (final target in [55, 19, 64, 79]) {
+    for (final target in [55, 19, 64, 79, 1, 32, 36, 62]) {
       saved.clear();
       controller.jumpToSection(target);
       await t.pumpAndSettle();
