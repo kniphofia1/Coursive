@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderParagraph;
+import 'package:flutter/rendering.dart' show RenderParagraph, ScrollDirection;
 
 import '../theme/tokens.dart';
 import 'coursive_markdown.dart';
@@ -69,7 +69,8 @@ class MdReaderController extends ChangeNotifier {
   _MarkdownReaderState? _state;
 
   /// Index of the section at the top of the viewport.
-  int current = 0;
+  final _section = ValueNotifier<int>(0);
+  int get current => _section.value;
 
   /// 0…1 reading progress.
   double progress = 0;
@@ -89,9 +90,15 @@ class MdReaderController extends ChangeNotifier {
 
   void _update(int c, double p) {
     if (c == current && (p - progress).abs() < 0.005) return;
-    current = c;
+    _section.value = c;
     progress = p;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _section.dispose();
+    super.dispose();
   }
 }
 
@@ -139,7 +146,12 @@ class _MarkdownReaderState extends State<MarkdownReader> {
   int? _flash;
   Timer? _clearFlash;
   int _jumpRequest = 0;
-  bool _restoredBookmark = false, _restoring = false;
+  int _inputEpoch = 0;
+  int? _pendingJump, _endSection;
+  bool _trackScheduled = false;
+  bool _restoredBookmark = false;
+  int? _restoreEpoch;
+  bool get _restoring => _restoreEpoch == _inputEpoch;
 
   Iterable<RenderParagraph> _paragraphs(RenderObject root) sync* {
     if (root is RenderParagraph) yield root;
@@ -150,18 +162,20 @@ class _MarkdownReaderState extends State<MarkdownReader> {
 
   Future<void> _restoreBookmark(Map mark) async {
     if (!mounted || !_scroll.hasClients || _restoredBookmark) return;
-    _restoredBookmark = _restoring = true;
+    _restoredBookmark = true;
+    final epoch = _inputEpoch;
+    _restoreEpoch = epoch;
     try {
       final quote = mark['quote'] as String? ?? '';
       final ratio = (mark['ratio'] as num? ?? 0).clamp(0, 1);
       _scroll.jumpTo(_scroll.position.maxScrollExtent * ratio);
       await WidgetsBinding.instance.endOfFrame;
-      if (!mounted || !_scroll.hasClients || quote.isEmpty) return;
+      if (!mounted || epoch != _inputEpoch || !_scroll.hasClients || quote.isEmpty) return;
       final hits = doc.find(quote);
       if (hits.length == 1 && _keys[hits.first]?.currentContext == null) {
-        await _jump(hits.first);
+        await _jump(hits.first, restoring: true);
       }
-      if (!mounted || !_scroll.hasClients) return;
+      if (!mounted || epoch != _inputEpoch || !_scroll.hasClients) return;
       final viewport = context.findRenderObject()!;
       for (final paragraph in _paragraphs(viewport)) {
         if (!paragraph.text.toPlainText().startsWith(quote)) continue;
@@ -170,13 +184,28 @@ class _MarkdownReaderState extends State<MarkdownReader> {
         _scroll.jumpTo(target.clamp(0.0, _scroll.position.maxScrollExtent));
         break;
       }
-    } finally { _restoring = false; }
+    } finally {
+      if (_restoreEpoch == epoch) _restoreEpoch = null;
+    }
   }
 
-  bool _saveBookmark(ScrollEndNotification event) {
-    if (event.depth != 0 || _restoring || !_scroll.hasClients || widget.onBookmark == null) return false;
+  bool _onScroll(ScrollNotification event) {
+    if (event.depth != 0) return false;
+    if ((event is ScrollStartNotification && event.dragDetails != null) ||
+        (event is UserScrollNotification && event.direction != ScrollDirection.idle)) {
+      _inputEpoch++;
+      _restoredBookmark = true;
+      _jumpRequest++;
+      _pendingJump = _endSection = null;
+    }
+    if (event is ScrollEndNotification && _pendingJump == null) _saveBookmark();
+    return false;
+  }
+
+  void _saveBookmark() {
+    if (_restoring || !_scroll.hasClients || widget.onBookmark == null) return;
     final pos = _scroll.position;
-    if (pos.maxScrollExtent <= 0) return false;
+    if (pos.maxScrollExtent <= 0) return;
     final viewport = context.findRenderObject()!;
     var quote = '';
     var fraction = 0.0;
@@ -189,7 +218,6 @@ class _MarkdownReaderState extends State<MarkdownReader> {
       break;
     }
     widget.onBookmark!({'ratio': (pos.pixels / pos.maxScrollExtent).clamp(0.0, 1.0), 'quote': quote, 'fraction': fraction});
-    return false;
   }
 
   MdDoc get doc => widget.doc;
@@ -198,7 +226,7 @@ class _MarkdownReaderState extends State<MarkdownReader> {
   void initState() {
     super.initState();
     widget.controller._state = this;
-    _scroll.addListener(_track);
+    _scroll.addListener(_scheduleTrack);
     final q = widget.initialQuery;
     if (q != null && q.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -210,7 +238,16 @@ class _MarkdownReaderState extends State<MarkdownReader> {
   @override
   void didUpdateWidget(MarkdownReader old) {
     super.didUpdateWidget(old);
-    if (old.controller != widget.controller) widget.controller._state = this;
+    if (old.controller != widget.controller) {
+      if (old.controller._state == this) old.controller._state = null;
+      widget.controller._state = this;
+    }
+    if (old.doc != doc) {
+      _inputEpoch++;
+      _jumpRequest++;
+      _pendingJump = _endSection = null;
+      _restoredBookmark = false;
+    }
   }
 
   @override
@@ -221,7 +258,17 @@ class _MarkdownReaderState extends State<MarkdownReader> {
     super.dispose();
   }
 
+  void _scheduleTrack() {
+    if (_trackScheduled) return;
+    _trackScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _trackScheduled = false;
+      if (mounted) _track();
+    });
+  }
+
   void _track() {
+    _keys.removeWhere((_, key) => key.currentContext == null);
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
     final viewport = context.findRenderObject() as RenderBox?;
@@ -233,28 +280,69 @@ class _MarkdownReaderState extends State<MarkdownReader> {
       final top = box.localToGlobal(Offset.zero, ancestor: viewport).dy;
       if (top <= 96 && e.key > cur) cur = e.key;
     }
-    widget.controller._update(cur, pos.maxScrollExtent <= 0 ? 1 : (pos.pixels / pos.maxScrollExtent).clamp(0.0, 1.0));
+    widget.controller._update(pos.extentAfter < 1 ? _endSection ?? cur : cur, pos.maxScrollExtent <= 0 ? 1 : (pos.pixels / pos.maxScrollExtent).clamp(0.0, 1.0));
   }
 
-  Future<void> _jump(int i, {bool flash = false}) async {
-    final request = ++_jumpRequest;
-    _clearFlash?.cancel();
-    setState(() => _flash = flash ? i : null);
-    for (var attempt = 0; attempt < 4; attempt++) {
-      if (!mounted || request != _jumpRequest) return;
-      final ctx = _keys[i]?.currentContext;
-      if (ctx != null && ctx.mounted) {
-        await Scrollable.ensureVisible(ctx, alignment: 0.02, duration: Motion.durationOf(context, Motion.short4), curve: Motion.emphasized);
-        break;
-      }
-      if (!_scroll.hasClients) return;
-      // Not built yet: move near it by proportion, then retry next frame.
-      final f = doc.sections.length <= 1 ? 0.0 : i / doc.sections.length;
-      _scroll.jumpTo((_scroll.position.maxScrollExtent * f).clamp(0.0, _scroll.position.maxScrollExtent));
-      await WidgetsBinding.instance.endOfFrame;
+  Future<void> _jump(int i, {bool flash = false, bool restoring = false}) async {
+    if (!_scroll.hasClients || i < 0 || i >= doc.sections.length) return;
+    if (!restoring) {
+      _inputEpoch++;
+      _restoredBookmark = true;
     }
-    if (mounted && flash && request == _jumpRequest) {
-      _clearFlash = Timer(const Duration(milliseconds: 1600), () => setState(() => _flash = null));
+    final request = ++_jumpRequest;
+    final replacing = _pendingJump != null;
+    _pendingJump = request;
+    _endSection = null;
+    _clearFlash?.cancel();
+    if (_flash != null) setState(() => _flash = null);
+    if (replacing && _scroll.position.isScrollingNotifier.value) {
+      _scroll.jumpTo(_scroll.offset);
+    }
+
+    double? lower, upper;
+    try {
+      // Each layout tells us which side of the target we reached. Extents can
+      // change as the lazy list lays out unusually long or short sections.
+      if (replacing) await WidgetsBinding.instance.endOfFrame;
+      for (var probe = 0; probe < 48; probe++) {
+        if (!mounted || request != _jumpRequest || !_scroll.hasClients) return;
+        final ctx = _keys[i]?.currentContext;
+        if (ctx != null && ctx.mounted) {
+          await Scrollable.ensureVisible(ctx, alignment: 0.02,
+              duration: Motion.durationOf(context, Motion.short4), curve: Motion.emphasized);
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted || request != _jumpRequest || !_scroll.hasClients) return;
+          _endSection = _scroll.position.extentAfter < 1 ? i : null;
+          _track();
+          if (!restoring) _saveBookmark();
+          if (flash) {
+            setState(() => _flash = i);
+            _clearFlash = Timer(const Duration(milliseconds: 1600), () => setState(() => _flash = null));
+          }
+          return;
+        }
+        final pos = _scroll.position;
+        final live = _keys.entries.where((entry) => entry.value.currentContext != null);
+        if (live.isEmpty) return;
+        if (live.every((entry) => entry.key < i)) {
+          lower = pos.pixels;
+        } else {
+          upper = pos.pixels;
+        }
+        final low = (lower ?? pos.minScrollExtent).clamp(pos.minScrollExtent, pos.maxScrollExtent);
+        final high = (upper ?? pos.maxScrollExtent).clamp(low, pos.maxScrollExtent);
+        final estimate = pos.maxScrollExtent * i / doc.sections.length;
+        var offset = probe == 0 && estimate > low && estimate < high
+            ? estimate : (low + high) / 2;
+        if ((offset - pos.pixels).abs() < 1) {
+          offset = lower == pos.pixels ? high : low;
+          if (offset == pos.pixels) return;
+        }
+        _scroll.jumpTo(offset);
+        await WidgetsBinding.instance.endOfFrame;
+      }
+    } finally {
+      if (request == _jumpRequest) _pendingJump = null;
     }
   }
 
@@ -308,8 +396,7 @@ class _MarkdownReaderState extends State<MarkdownReader> {
           return Center(child: ConstrainedBox(constraints: BoxConstraints(maxWidth: widget.maxWidth), child: child));
         },
     );
-    final body = widget.onBookmark == null ? list :
-        NotificationListener<ScrollEndNotification>(onNotification: _saveBookmark, child: list);
+    final body = NotificationListener<ScrollNotification>(onNotification: _onScroll, child: list);
     return widget.decorateSection != null ? body :
         SelectionArea(contextMenuBuilder: readingSelectionMenu, child: body);
   }
@@ -335,7 +422,7 @@ class ReaderToc extends StatelessWidget {
     }
     final top = doc.headings.map((h) => h.level).reduce((a, b) => a < b ? a : b);
     return ListenableBuilder(
-      listenable: controller,
+      listenable: controller._section,
       builder: (context, _) {
         // The heading whose section is being read: the last one at or above it.
         var active = 0;
